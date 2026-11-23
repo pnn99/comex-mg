@@ -1,0 +1,14 @@
+/dados/brutos/
+/dados/tratados/
+/dados/malhas/mg_municipios.geojson
+/graficos/
+/resultados/pre_choque/
+__pycache__/
+*.pyc
+.venv/
+.env
+.aws/
+.codex/
+/.agents/
+/SKILLS.md
+/AGENTS.md
