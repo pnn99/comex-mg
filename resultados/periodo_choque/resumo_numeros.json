@@ -1,0 +1,15 @@
+{
+  "base_registros": 610971,
+  "base_cobertura": "01/2015 a 10/2026",
+  "base_sha256": "fa1cda8b0bdcb558bca8c80835c79c2d1018ddac74396c4c086920ee27ba1918",
+  "janela_antes": "08/2024 a 07/2025",
+  "janela_depois": "08/2025 a 07/2026",
+  "fob_total_antes_usd_mi": 39145.3,
+  "fob_total_depois_usd_mi": 41364.3,
+  "fob_eua_antes_usd_mi": 5179.5,
+  "fob_eua_depois_usd_mi": 3476.6,
+  "participacao_eua_antes_pct": 13.23,
+  "participacao_eua_depois_pct": 8.4,
+  "municipios_com_vendas_eua_antes": 228,
+  "municipios_com_queda_eua": 177
+}
