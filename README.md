@@ -1,8 +1,8 @@
 # Vulnerabilidade e resiliência comercial dos municípios mineiros
 
-Projeto de pesquisa do IFMG, Campus Sabará. A etapa preliminar investiga quais municípios de Minas Gerais concentravam suas exportações em poucos produtos ou destinos, quanto dependiam do mercado dos Estados Unidos e quanto suas vendas mensais oscilavam antes das medidas tarifárias de 2025.
+Projeto de pesquisa do IFMG, Campus Sabará. Investigamos como a concentração das exportações em produtos e destinos e a dependência do mercado dos Estados Unidos antes de 2025 se associam às perdas e à compensação comercial observadas nos municípios de Minas Gerais.
 
-A versão auditada da base de exportações abrange **janeiro de 2015 a outubro de 2026**. Os gráficos históricos usam toda a série disponível na execução. O mapa e os indicadores municipais usam exclusivamente **janeiro de 2022 a dezembro de 2024**. A localização corresponde ao domicílio fiscal do exportador. A análise da resposta posterior às tarifas é uma etapa futura.
+A versão auditada da base abrange **janeiro de 2015 a outubro de 2026**. A série histórica usa todos os meses disponíveis. Os indicadores estruturais municipais usam **janeiro de 2022 a dezembro de 2024**. A comparação anual confronta **agosto de 2024 a julho de 2025** com **agosto de 2025 a julho de 2026**. O panorama acompanha também o trimestre mais recente e projeta os três meses seguintes para as exportações estaduais. A localização corresponde ao domicílio fiscal do exportador.
 
 ## Reproduzir os resultados
 
@@ -14,10 +14,27 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-Na primeira execução, conecte-se à internet e rode os comandos na ordem abaixo. O primeiro consulta o Comex Stat em lotes anuais de Minas Gerais, salva os CSVs, consolida a série e gera três gráficos históricos. Se a coleta terminar com sucesso, o segundo lê a base tratada, obtém a malha municipal e gera os indicadores e o mapa. Os scripts criam as pastas necessárias.
+Com o ambiente preparado, execute a análise completa com **um comando**. A primeira execução precisa de internet para obter os dados e a malha municipal.
 
 ```bash
-python analise_comex.py && python analise_cientifica.py
+python executar_analise.py
+```
+
+Ao concluir, abra **`resultados/secao_4/resultados_discussao.pdf`** para percorrer as subseções 4.1 a 4.4. O caderno de previsões e panorama permanece em `resultados/panorama/visuais/panorama_visual.pdf`. O terminal mostra o progresso das seis etapas. Se uma delas falhar, a execução para nessa etapa e exibe o erro do script responsável.
+
+| Etapa | Script acionado | Resultados |
+|---|---|---|
+| 1. Coleta e histórico | `analise_comex.py` | Consulta o Comex Stat em lotes anuais de MG, consolida os CSVs e gera os três gráficos históricos. |
+| 2. Estrutura pré-choque | `analise_cientifica.py` | Obtém ou reutiliza a malha, calcula os indicadores, compara critérios de inclusão e gera o mapa municipal. |
+| 3. Perfis municipais (4.2) | `analise_perfis.py` | Compara K-Means e Ward, avalia estabilidade e gera a caracterização e o mapa dos grupos. |
+| 4. Período do choque | `analise_choque.py` | Compara as duas janelas anuais e gera tabelas e figuras por município, produto e destino. |
+| 5. Panorama e previsões | `panorama_comercial.py` | Relaciona dependência, perdas e compensação, avalia previsões e chama `visualizar_panorama.py` para gerar o caderno e os PNGs. |
+| 6. Resiliência e discussão (4.4) | `analise_resiliencia.py` | Cruza perfis, desfechos e listas oficiais, estima modelos com controles e monta o caderno da seção 4. |
+
+Para repetir **todas as análises sem rede**, use o comando abaixo. Ele requer o consolidado em `dados/tratados/exportacoes_mg_atual.csv` e a malha em `dados/malhas/mg_municipios.geojson`. Os resultados refletem a cobertura dessa cópia local.
+
+```bash
+python executar_analise.py --usar-base-local
 ```
 
 | Resultado gerado | Caminho local |
@@ -28,12 +45,17 @@ python analise_comex.py && python analise_cientifica.py
 | Tabela por município | `resultados/pre_choque/indicadores_municipais.csv` |
 | Comparação de sete critérios de inclusão | `resultados/pre_choque/sensibilidade_inclusao.csv` |
 | Mapa dos quatro indicadores | `resultados/pre_choque/mapa_indicadores_mg.png` |
+| Correlações, grupos, validação, sensibilidades e mapa | `resultados/perfis_municipais/` |
+| Exposição potencial, regressões, comparações entre perfis e caderno da seção 4 | `resultados/secao_4/` |
+| Comparação anual, séries e mapas do choque | `resultados/periodo_choque/` |
+| Cruzamentos municipais, produtos, projeções e validação | `resultados/panorama/*.csv` |
+| Caderno em PDF e figuras individuais em PNG | `resultados/panorama/visuais/` |
 
 Na execução de referência, a tabela apresentou **446 municípios** e a coluna `fob_pre_usd` somou **US$ 110.032.285.301**. O mapa representou em cinza os 407 municípios sem FOB positivo na janela. Os CSVs usam ponto e vírgula como separador.
 
 Depois da primeira execução, use `python analise_cientifica.py` para recalcular os indicadores a partir da base tratada e da malha local. O comando `python analise_comex.py --somente-graficos` regenera os três gráficos históricos usando o consolidado.
 
-Para executar os testes da coleta e dos indicadores, use o comando abaixo. As respostas da API nos testes são simuladas.
+Para executar os testes da coleta, dos indicadores e do panorama, use o comando abaixo. As respostas da API nos testes são simuladas.
 
 ```bash
 python -m unittest discover -s tests -v
@@ -49,3 +71,18 @@ python -m unittest discover -s tests -v
 
 
 As fórmulas, a definição dos meses ativos e os procedimentos de validação estão na [metodologia da base e da coleta](docs/base_e_coleta.tex) e na [metodologia dos indicadores](docs/indicadores_vulnerabilidade.tex).
+
+## Panorama do choque e acompanhamento
+
+Depois de obter a base tratada, execute `python panorama_comercial.py` para cruzar a estrutura municipal de 2022–2024 com as perdas, comparar produtos e destinos e prever os próximos três meses de exportações estaduais. A rotina grava os CSVs em `resultados/panorama/` e gera o caderno de gráficos e tabelas em `resultados/panorama/visuais/panorama_visual.pdf`. Cada página também fica disponível como PNG na mesma pasta. O [panorama da pesquisa](docs/panorama_comercial.md) apresenta as janelas, o significado dos indicadores e a validação das previsões.
+
+Para gerar novamente apenas as figuras e o PDF, usando os CSVs do panorama e a malha municipal já obtidos, execute `python visualizar_panorama.py`.
+
+
+## Resultados e discussão do artigo
+
+A [redação da seção 4](docs/resultados_discussao.tex) usa a extração com observações até outubro de 2026. Para incluí-la no artigo, use o pacote LaTeX `graphicx` e compile a partir da raiz do projeto. Os arquivos de redação registram a execução de referência. Com uma nova extração, confira os números publicados contra as tabelas regeneradas.
+
+Para repetir a 4.2 com a tabela de indicadores já gerada, execute `python analise_perfis.py`. A classificação municipal está em `municipios.csv`, na pasta de perfis. A coluna vazia identifica exportadores fora do corte. `modelos.csv` compara 100 especificações; `comparacao_principal.csv` documenta a seleção e `sensibilidade.csv` compara classificações sobre os municípios comuns.
+
+Para repetir a 4.4 com os resultados da 4.2 e do panorama disponíveis, execute `python analise_resiliencia.py`. Em `resultados/secao_4/`, `resposta_por_perfil.csv` informa as amostras de cada desfecho e `regressoes_hc3.csv` contém os coeficientes e intervalos. `resposta_municipal.csv` liga o código municipal e o perfil aos desfechos de cada janela. `compensacao_por_produto.csv` soma as perdas e os ganhos pareados dentro de cada município e SH4. As parcelas de exposição vão de 0 a 1. Consulte a [correspondência tarifária e suas limitações](dados/tarifas/README.md) e as [decisões metodológicas](docs/decisoes_metodologicas.md).

@@ -1,8 +1,9 @@
-/dados/brutos/
-/dados/tratados/
-/dados/malhas/mg_municipios.geojson
+/dados/
 /graficos/
-/resultados/pre_choque/
+/resultados/
+/docs/
+*.pdf
+*.zip
 __pycache__/
 *.pyc
 .venv/
@@ -12,3 +13,5 @@ __pycache__/
 /.agents/
 /SKILLS.md
 /AGENTS.md
+
+/.publicacao/

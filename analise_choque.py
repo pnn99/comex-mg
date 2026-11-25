@@ -16,13 +16,14 @@ SAIDA.mkdir(parents=True, exist_ok=True)
 
 EUA = "249"  # código do país no Comex Stat
 
-# Janelas de comparação (12 meses antes e 12 meses depois do início da tarifa de 50%)
+# Janelas de 12 meses em torno da entrada da EO 14323, com cobertura variável por produto.
 ANTES = ("2024-08-01", "2025-07-31")
 DEPOIS = ("2025-08-01", "2026-07-31")
 
 # Marcos tarifários (conferir datas e listas nas fontes oficiais antes de citar no artigo)
 MARCOS = [
-    ("2025-08-06", "6/ago/2025: tarifa de 50%"),
+    ("2025-08-06", "6/ago/2025: adicional de 40%, com exceções"),
+    ("2025-11-13", "13/nov/2025: novas exceções"),
     ("2026-02-20", "20/fev/2026: ordens revogadas"),
     ("2026-07-22", "22/jul/2026: Seção 301 (25%)"),
 ]
@@ -54,7 +55,8 @@ print("SHA-256 da base:", sha256(BASE))
 df["eua"] = df["CO_PAIS"].eq(EUA)
 a0, a1 = pd.Timestamp(ANTES[0]), pd.Timestamp(ANTES[1])
 d0, d1 = pd.Timestamp(DEPOIS[0]), pd.Timestamp(DEPOIS[1])
-assert df.DATA.max() >= d1, "A base não cobre a janela 'depois'."
+if not pd.period_range(a0, d1, freq="M").isin(df.DATA.dt.to_period("M")).all():
+    raise ValueError("A base precisa cobrir cada mês das duas janelas anuais.")
 antes = df[(df.DATA >= a0) & (df.DATA <= a1)]
 depois = df[(df.DATA >= d0) & (df.DATA <= d1)]
 print(f"Janela antes: {a0:%m/%Y}–{a1:%m/%Y} | depois: {d0:%m/%Y}–{d1:%m/%Y}")
@@ -108,7 +110,7 @@ for a in ax:
     a.grid(True, alpha=0.3)
 ax[2].xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 7]))
 ax[2].xaxis.set_major_formatter(mdates.DateFormatter("%m/%Y"))
-fig.suptitle("Exportações mensais de Minas Gerais (FOB): demais destinos e Estados Unidos, 2022 a 2026")
+fig.suptitle(f"Exportações mensais de Minas Gerais (FOB): demais destinos e Estados Unidos, até {rec.index.max():%m/%Y}")
 fig.tight_layout()
 fig.savefig(SAIDA / "fig_serie_mensal.png")
 plt.close()
