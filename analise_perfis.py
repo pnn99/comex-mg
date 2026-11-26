@@ -272,7 +272,8 @@ def main():
         raise ValueError("Há municípios dos indicadores sem correspondência cartográfica.")
     modelos, rotulos = comparar_modelos(t)
     principal = selecionar(modelos)
-    escolha = principal.iloc[0]
+    principal["referencia"] = principal.metodo.eq("K-Means") & principal.k.eq(5)
+    escolha = principal.loc[principal.referencia].iloc[0]
     ref = rotulos[12, True, escolha.metodo, escolha.k]
     perfis, resumo, quartis = caracterizar(t, ref)
     sens = sensibilidades(t, escolha, rotulos)
@@ -293,7 +294,7 @@ def main():
         for nome, fig in [
             ("correlacoes", fig_corr),
             ("comparacao_modelos", tabela_visual(comp, "Comparação dos modelos na amostra de referência",
-             f"Comex Stat/MDIC · 2022–2024 · n = {len(ref)} · 4 indicadores · ARI em 20 subamostras. Primeira linha: solução exploratória.")),
+             f"Comex Stat/MDIC · 2022–2024 · n = {len(ref)} · 4 indicadores · ARI em 20 subamostras. Referência pré-especificada: K-Means, k=5.")),
             ("caracterizacao", tabela_visual(tab, "Características dos perfis municipais",
              "Comex Stat/MDIC · 2022–2024 · Medianas municipais. FOB (%) representa a parcela do valor exportado pela amostra.")),
             ("mapa_perfis", mapa(perfis, t, geo)),

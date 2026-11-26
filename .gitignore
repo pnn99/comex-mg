@@ -1,7 +1,15 @@
 /dados/
 /graficos/
 /resultados/
-/docs/
+/docs/*
+!/docs/calendario_tarifario.csv
+!/docs/excecoes_2026.csv
+!/docs/cronologia_tarifaria.md
+!/docs/metodologia_tarifaria.md
+!/docs/decisoes_metodologicas.md
+!/docs/dicionario_dados.md
+!/docs/validacoes.md
+/CONTEXTO_MESTRE_*.txt
 *.pdf
 *.zip
 __pycache__/

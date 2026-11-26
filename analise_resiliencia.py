@@ -7,7 +7,7 @@ import pandas as pd
 from analise_cientifica import BASE, RAIZ
 from analise_perfis import SAIDA as PERFIS, tabela_visual
 from panorama_comercial import SAIDA as PANORAMA
-from preparar_tarifas import obter_lista
+from modelos_associacao import ajustar
 
 SAIDA = RAIZ / "resultados/secao_4"
 DESFECHOS = ["perdeu_eua_pct", "crescimento_simetrico_total_pct", "compensacao_mesmo_sh4_pct"]
@@ -17,69 +17,6 @@ CONTROLES = ["log_fob", "parcela_cafe", "parcela_minerio"]
 
 def ler_csv(arquivo):
     return pd.read_csv(arquivo, sep=";", dtype={"CO_MUN": str, "SH4": str, "HTS8": str})
-
-
-def classificar_tarifas(codigos, lista):
-    if (lista.duplicated(["ato","tipo","HTS8"]).any() or not lista.HTS8.str.fullmatch(r"\d{8}").all()
-            or not lista.HTS8.str[:4].eq(lista.SH4).all()):
-        raise ValueError("Correspondência HTS8–SH4 inválida.")
-    quadros = []
-    for medida, ato in [("adicional_agosto","EO14323"), ("novas_excecoes_novembro","EO14361")]:
-        itens = lista[lista.ato.eq(ato)]
-        inteiros = set(itens.loc[itens.tipo.eq("subposicao") & itens.HTS8.str.endswith("0000"), "SH4"])
-        if ato == "EO14361":
-            cafe = {"09011100","09011200","09012100","09012200","09019010","09019020"}
-            if not cafe.issubset(itens.loc[itens.tipo.eq("subposicao"), "HTS8"]):
-                raise ValueError("A revisão do café diverge do anexo de novembro.")
-            inteiros.add("0901")
-        q = itens.groupby("SH4").size().reindex(codigos, fill_value=0).rename("itens_anexo").to_frame()
-        inteiro = q.index.isin(inteiros)
-        if ato == "EO14323":
-            agro_sem_excecao = q.index.str[:2].isin(["07","08","09","10"]) & q.itens_anexo.eq(0)
-            q["peso_min"] = agro_sem_excecao.astype(int)
-            q["peso_max"] = (~inteiro).astype(int)
-        else:
-            q["peso_min"] = inteiro.astype(int)
-            q["peso_max"] = q.itens_anexo.gt(0).astype(int)
-        quadros.append(q.assign(medida=medida, ato=ato, vigencia=itens.vigencia.iloc[0]).reset_index())
-    return pd.concat(quadros, ignore_index=True)
-
-
-def exposicao(produtos, pesos):
-    """Limites da parcela potencial da pauta mundial e cobertura do FOB aos EUA."""
-    linhas = []
-    for medida, q in pesos.groupby("medida"):
-        p = produtos.merge(q, on="SH4", how="left", validate="many_to_one")
-        if p[["peso_min","peso_max"]].isna().any().any():
-            raise ValueError("Há produtos sem limites de exposição.")
-        p["usd_min"] = p.eua * p.peso_min
-        p["usd_max"] = p.eua * p.peso_max
-        t = p.groupby("CO_MUN")[["eua","total","usd_min","usd_max"]].sum()
-        t = t[t.total.gt(0)].copy()
-        t["exposicao_min"] = t.usd_min / t.total
-        t["exposicao_max"] = t.usd_max / t.total
-        t["cobertura_fob_eua"] = 1 - (t.usd_max - t.usd_min) / t.eua.where(t.eua.gt(0))
-        linhas.append(t.assign(medida=medida).reset_index())
-    return pd.concat(linhas, ignore_index=True)
-
-
-def regressao(dados, y, termos, **descricao):
-    """MQO municipal com covariância HC3, IC normal assintótico de 95%."""
-    t = dados[[y, *termos]].dropna()
-    x = np.column_stack([np.ones(len(t)), t[termos]])
-    nomes = ["constante", *termos]
-    if len(t) <= len(nomes) or np.linalg.matrix_rank(x) != len(nomes):
-        raise ValueError(f"Amostra insuficiente ou colinear em {y}, {descricao}.")
-    inversa = np.linalg.pinv(x)
-    beta = inversa @ t[y]
-    erro = t[y] - x @ beta
-    h = np.einsum("ij,ji->i", x, inversa)
-    if np.any(h >= 1 - 1e-10):
-        raise ValueError(f"Alavancagem unitária em {y}, {descricao}.")
-    ajustada = inversa * (erro.to_numpy() / (1 - h))
-    ep = np.sqrt((ajustada ** 2).sum(axis=1))
-    return pd.DataFrame({"termo": nomes, "coef": beta, "ep_hc3": ep, "ic025": beta - 1.96 * ep,
-                         "ic975": beta + 1.96 * ep, "n": len(t), "desfecho": y, **descricao})
 
 
 def desfechos(d):
@@ -94,35 +31,22 @@ def desfechos(d):
 def por_perfil(d):
     linhas = []
     for (janela, perfil), t in d.dropna(subset=["perfil"]).groupby(["comparacao","perfil"]):
-        linhas.append(dict(comparacao=janela, perfil=perfil, municipios=len(t),
+        linhas.append(dict(comparacao=janela, perfil=perfil, n_municipios_amostra=len(t),
                           n_eua=t.variacao_eua_pct.count(), mediana_variacao_eua_pct=t.variacao_eua_pct.median(),
                           pct_com_queda_eua=t.perdeu_eua_pct.mean(), pct_com_resistencia=t.resistiu_eua_pct.mean(),
                           n_total=t.variacao_total_pct.count(), mediana_variacao_total_pct=t.variacao_total_pct.median(),
-                          n_compensacao=t.compensacao_mesmo_sh4_pct.count(),
+                          n_compensacao_valida=t.compensacao_mesmo_sh4_pct.count(),
+                          n_municipios_com_perda_eua=t.delta_eua.lt(0).sum(),
+                          n_municipios_com_perda_bruta_sh4=t.perda_eua_sh4.gt(0).sum(),
+                          n_municipios_com_ganho_outros=t.delta_outros.gt(0).sum(),
+                          n_municipios_com_ganho_em_algum_sh4=t.ganho_outros_sh4.gt(0).sum(),
+                          n_municipios_com_compensacao_positiva=t.compensado_sh4.gt(0).sum(),
+                          percentual_municipios_com_compensacao=100*t.compensado_sh4.gt(0).mean(),
+                          percentual_compensacao_entre_validos=(100*t.compensado_sh4.gt(0).sum() /
+                              t.compensacao_mesmo_sh4_pct.count() if t.compensacao_mesmo_sh4_pct.count() else np.nan),
                           mediana_compensacao_pct=t.compensacao_mesmo_sh4_pct.median(),
                           perda_bruta_sh4_usd=t.perda_eua_sh4.sum(), compensado_sh4_usd=t.compensado_sh4.sum()))
     return pd.DataFrame(linhas)
-
-
-def ajuste_tarifario(painel, exp):
-    # Dois meses de calendário completos sob o marco inicial e anteriores à revisão de novembro.
-    bruta = pd.read_csv(BASE, sep=";", usecols=["CO_ANO","CO_MES","CO_MUN","CO_PAIS","VL_FOB"],
-                        dtype={"CO_MUN":str, "CO_PAIS":str})
-    janela = bruta[bruta.CO_ANO.isin([2024,2025]) & bruta.CO_MES.isin([9,10]) & bruta.CO_PAIS.eq("249")]
-    valores = janela.groupby(["CO_MUN","CO_ANO"]).VL_FOB.sum().unstack(fill_value=0)
-    t = painel[painel.comparacao.eq("anual") & painel.meses_ativos.ge(12)].set_index("CO_MUN")
-    t = t[["municipio", "perfil", *CAMPOS, *CONTROLES]]
-    t = t.join(valores.rename(columns={2024:"base_bimestre",2025:"pos_bimestre"}))
-    t = t.join(exp[exp.medida.eq("adicional_agosto")].set_index("CO_MUN")[["exposicao_min","exposicao_max","cobertura_fob_eua"]])
-    t = t[t.base_bimestre.gt(0)].copy()
-    t["perdeu_eua_pct"] = 100 * t.pos_bimestre.lt(t.base_bimestre)
-    ajustes = []
-    for limite in ["exposicao_min","exposicao_max"]:
-        # Modelos de cenários separados. A faixa entre coeficientes não constitui um IC.
-        termos = [limite, "hhi_produtos", "hhi_destinos", "log_fob", "parcela_cafe", "parcela_minerio"]
-        ajustes.append(regressao(t, "perdeu_eua_pct", termos, modelo=limite,
-                                 min_meses=12, comparacao="set_out_2025_vs_2024"))
-    return ajustes, t.reset_index()
 
 
 def main():
@@ -130,8 +54,7 @@ def main():
     prod = ler_csv(PANORAMA / "produtos_municipios.csv").query("janela == 'estrutura'").copy()
     if prod.duplicated(["CO_MUN","SH4"]).any():
         raise ValueError("Duplicação de município e produto na janela estrutural.")
-    pesos = classificar_tarifas(pd.Index(sorted(prod.SH4.unique()), name="SH4"), ler_csv(obter_lista()))
-    exp = exposicao(prod, pesos)
+    exp = ler_csv(SAIDA / "exposicao_municipal_por_medida.csv")
     prod["parcela_cafe"] = prod.total.where(prod.SH4.eq("0901"), 0)
     prod["parcela_minerio"] = prod.total.where(prod.SH4.eq("2601"), 0)
     composicao = prod.groupby("CO_MUN")[["total","parcela_cafe","parcela_minerio"]].sum()
@@ -150,24 +73,50 @@ def main():
     d["log_fob"] = np.log(d.fob_pre_usd)
     d["log2_destinos_efetivos"] = np.log2(d.numero_efetivo_destinos)
     comparacao = por_perfil(d)
-    ajustes = []
-    for janela in ["anual","inicial"]:
+    ajustes, diagnosticos = [], []
+
+    def estimar(t, y, termos, **spec):
+        familias = {"perdeu_eua_pct":["linear","logit"],
+                    "compensacao_mesmo_sh4_pct":["linear","fracional"]}.get(y,["linear"])
+        for familia in familias:
+            coef, diag = ajustar(t, y, termos, familia, **spec)
+            diagnosticos.append(diag)
+            if not coef.empty:
+                ajustes.append(coef)
+
+    for janela in ["anual","inicial","bimestre"]:
+        t = d[d.comparacao.eq(janela)].copy()
         for corte in (1,12,24):
-            amostra = d[d.comparacao.eq(janela) & d.meses_ativos.ge(corte)]
+            amostra = t[t.meses_ativos.ge(corte)]
             for y in DESFECHOS:
                 termos = CAMPOS.copy()
                 if y == "compensacao_mesmo_sh4_pct":
                     termos[1] = "log2_destinos_efetivos"
-                ajustes.append(regressao(amostra, y, termos + CONTROLES,
-                                         comparacao=janela, min_meses=corte, modelo="indicadores"))
-        t = d[d.comparacao.eq(janela) & d.perfil.notna()].copy()
-        # Contrastes ajustados frente ao primeiro perfil, com o mesmo controle de porte e composição.
-        dummies = pd.get_dummies(t.perfil, prefix="perfil", drop_first=True, dtype=float)
+                estimar(amostra,y,termos+CONTROLES,comparacao=janela,min_meses=corte,modelo="indicadores")
+            # Cenários do adicional inicial. Na janela anual representam exposição estrutural
+            # ao regime de agosto associada a uma resposta que atravessa diversos regimes.
+            for area, expos in exp[exp.medida.eq("brasil_inicial")].groupby("composicao"):
+                amostra_exp = amostra.merge(expos,on="CO_MUN",how="left",validate="one_to_one")
+                for limite in ["min","max"]:
+                    campo = "exposicao_total_"+limite
+                    for y in DESFECHOS:
+                        estimar(amostra_exp,y,[campo,*CAMPOS,*CONTROLES],comparacao=janela,min_meses=corte,
+                                modelo="tarifario_"+limite,composicao=area,medida="brasil_inicial")
+                        # Especificação reduzida pré-definida para ambos os cenários.
+                        reduzidos = [termo for termo in CAMPOS if termo != "participacao_eua"]
+                        estimar(amostra_exp,y,[campo,*reduzidos,*CONTROLES],comparacao=janela,min_meses=corte,
+                                modelo="tarifario_reduzido_"+limite,composicao=area,medida="brasil_inicial")
+        grupos = t[t.perfil.notna()].copy()
+        for perfil in ["P2","P3","P4","P5"]:
+            grupos["perfil_"+perfil] = grupos.perfil.eq(perfil).astype(int)
         for y in DESFECHOS:
-            ajustes.append(regressao(t.join(dummies), y, list(dummies.columns) + CONTROLES,
-                                     comparacao=janela, min_meses=12, modelo="perfis"))
-    tarifarios, bimestre = ajuste_tarifario(d, exp)
-    reg = pd.concat(ajustes + tarifarios, ignore_index=True)
+            estimar(grupos,y,["perfil_P2","perfil_P3","perfil_P4","perfil_P5",*CONTROLES],
+                    comparacao=janela,min_meses=12,modelo="perfis")
+    reg_todos = pd.concat(ajustes,ignore_index=True)
+    reg = reg_todos[reg_todos.familia.eq("linear")]
+    reg_todos[reg_todos.familia.eq("logit")].to_csv(SAIDA / "regressoes_logit.csv",sep=";",index=False)
+    reg_todos[reg_todos.familia.eq("fracional")].to_csv(SAIDA / "regressoes_fracionais.csv",sep=";",index=False)
+    pd.DataFrame(diagnosticos).to_csv(SAIDA / "diagnosticos_modelos.csv",sep=";",index=False)
     pares = ler_csv(PANORAMA / "compensacao_municipio_sh4_anual.csv")
     if pares.duplicated(["CO_MUN","SH4"]).any():
         raise ValueError("Duplicação na tabela anual de compensação por produto e município.")
@@ -178,13 +127,13 @@ def main():
     if not por_produto[medidas].sum().eq(anual_mg).all():
         raise ValueError("Perdas e compensações por SH4 divergem dos totais municipais.")
     SAIDA.mkdir(exist_ok=True, parents=True)
-    for nome, t in {"correspondencia_sh4":pesos, "exposicao_municipal":exp, "exposicao_resposta_bimestre":bimestre,
+    for nome, t in {
                     "resposta_por_perfil":comparacao, "regressoes_hc3":reg,
                     "compensacao_por_produto":por_produto.reset_index(), "resposta_municipal":d}.items():
         t.to_csv(SAIDA / f"{nome}.csv",sep=";",index=False)
     anual = comparacao[comparacao.comparacao.eq("anual")]
-    tabela = anual[["perfil","n_eua","pct_com_queda_eua","mediana_variacao_total_pct","n_compensacao","mediana_compensacao_pct"]].copy()
-    tabela.columns = ["Perfil","n EUA","Com queda (%)","Δ total (%)¹","n compensação","Compensação (%)¹"]
+    tabela = anual[["perfil","n_eua","pct_com_queda_eua","mediana_variacao_total_pct","n_municipios_com_compensacao_positiva","mediana_compensacao_pct"]].copy()
+    tabela.columns = ["Perfil","n EUA","Com queda (%)","Δ total (%)¹","Com compensação","Compensação (%)¹"]
     fig = tabela_visual(tabela, "4.4 · Resposta comercial por perfil prévio",
                         "¹ Medianas municipais · Ago/2024–jul/2025 e ago/2025–jul/2026 · Compensação dentro do mesmo município e SH4.")
     fig.savefig(SAIDA / "resposta_por_perfil.png",dpi=180,bbox_inches="tight")
@@ -194,8 +143,11 @@ def main():
                    *[(f"4.2 · {titulo}", PERFIS / f"{nome}.png") for titulo, nome in
                      [("Correlações","correlacoes"),("Validação","comparacao_modelos"),("Caracterização","caracterizacao"),("Perfis municipais","mapa_perfis")]],
                    ("4.3 · Trajetória mensal", PANORAMA / "visuais/01_historico.png"),
+                   ("4.3 · FOB, peso e valor unitário", RAIZ / "resultados/periodo_choque/serie_historica_valor_quantidade.png"),
+                   ("4.3 · Valor e quantidade por SH4 e destino", RAIZ / "resultados/periodo_choque/valor_quantidade_produto_destino.png"),
+                   ("4.3 · Compensação por município", RAIZ / "resultados/periodo_choque/mapa_compensacao.png"),
                    ("4.3 · Resposta por período", PANORAMA / "visuais/02_fases.png"),
-                   ("4.3 · Recuperação", PANORAMA / "visuais/02b_recuperacao.png"),
+                   ("4.3 · Recuperação municipal após a queda inicial", RAIZ / "resultados/periodo_choque/recuperacao.png"),
                    ("4.3 · Produtos e perdas", PANORAMA / "visuais/09_produtos_perdas.png")]
         for titulo, caminho in paineis:
             painel, ax = plt.subplots(figsize=(12,8), layout="constrained")
@@ -241,15 +193,13 @@ def main():
                             "Janela anual · Controles de porte e composição · Crescimento mundial simétrico · Intervalos assintóticos HC3.")
         pdf.savefig(fig)
         plt.close(fig)
-        totais = exp.groupby("medida")[["usd_min","usd_max","total","eua"]].sum()
+        totais = exp.groupby(["medida","composicao"])[["usd_min","usd_max","total","eua"]].sum().reset_index()
         exposicoes = pd.DataFrame({
-            "Recorte": ["Adicional inicial","Novas exceções"],
-            "Piso (%)": 100 * totais.usd_min / totais.total,
-            "Teto (%)": 100 * totais.usd_max / totais.total,
-            "FOB EUA resolvido (%)": 100 * (1 - (totais.usd_max-totais.usd_min) / totais.eua),
-        })
+            "Medida": totais.medida, "Composição": totais.composicao,
+            "Piso (%)": 100*totais.usd_min/totais.total, "Teto (%)": 100*totais.usd_max/totais.total,
+            "FOB EUA resolvido (%)":100*(1-(totais.usd_max-totais.usd_min)/totais.eua)})
         fig = tabela_visual(exposicoes, "4.4 · Alcance tarifário potencial sobre a pauta prévia",
-                            "Piso e teto em % do FOB mundial de MG em 2022–2024. Cada linha mede um recorte próprio. Fontes: MDIC e anexos das EO 14323/14361.")
+                            "FOB mundial de 2022–2024. As versões são avaliadas separadamente.")
         pdf.savefig(fig)
         plt.close(fig)
         h2 = reg[(reg.modelo=="indicadores") & (reg.termo=="log2_destinos_efetivos")].copy()

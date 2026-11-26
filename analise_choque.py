@@ -21,12 +21,10 @@ ANTES = ("2024-08-01", "2025-07-31")
 DEPOIS = ("2025-08-01", "2026-07-31")
 
 # Marcos tarifários (conferir datas e listas nas fontes oficiais antes de citar no artigo)
-MARCOS = [
-    ("2025-08-06", "6/ago/2025: adicional de 40%, com exceções"),
-    ("2025-11-13", "13/nov/2025: novas exceções"),
-    ("2026-02-20", "20/fev/2026: ordens revogadas"),
-    ("2026-07-22", "22/jul/2026: Seção 301 (25%)"),
-]
+from regimes_comerciais import calendario
+
+MARCOS = [(dia, " / ".join(t.medida.str.replace("_", " ")))
+          for dia, t in calendario().groupby("inicio")]
 
 MIN_FOB_MAPA = 1_000_000  # só colore no mapa municípios com pelo menos US$ 1 milhão aos EUA na janela "antes"
 # --------------------------------------------------------------------------

@@ -74,7 +74,9 @@ def comparar(pares, nome_a, nome_b):
     t["delta_eua"] = b.eua - a.eua
     t["delta_outros"] = b.outros - a.outros
     t["perda_eua_sh4"] = (-t.delta_eua).clip(lower=0)
-    t["compensado_sh4"] = np.minimum(t.perda_eua_sh4, t.delta_outros.clip(lower=0))
+    t["ganho_outros_sh4"] = t.delta_outros.clip(lower=0)
+    t["compensado_sh4"] = np.minimum(t.perda_eua_sh4, t.ganho_outros_sh4)
+    t["produtos_com_compensacao"] = t.compensado_sh4.gt(0).astype(int)
     return t
 
 
@@ -85,6 +87,8 @@ def respostas_municipais(pares):
     t["variacao_total_pct"] = 100 * proporcao(t.delta_total, t.eua_antes + t.outros_antes)
     t["variacao_kg_eua_pct"] = 100 * proporcao(t.kg_eua_depois - t.kg_eua_antes, t.kg_eua_antes)
     t["compensacao_mesmo_sh4_pct"] = 100 * proporcao(t.compensado_sh4, t.perda_eua_sh4)
+    t["razao_ganhos_perdas"] = proporcao(t.ganho_outros_sh4, t.perda_eua_sh4)
+    t["delta_kg_eua"] = t.kg_eua_depois - t.kg_eua_antes
     return t
 
 
@@ -222,12 +226,14 @@ def main():
     perfil = indicadores(pre,pp)
     janelas = {"estrutura": ("2022-01","2024-12"), "antes_12": ("2024-08","2025-07"),
                "depois_12": ("2025-08","2026-07"), "base_inicial": ("2024-08","2024-12"),
-               "choque_inicial": ("2025-08","2025-12")}
+               "choque_inicial": ("2025-08","2025-12"),
+               "base_bimestre": ("2024-09","2024-10"), "pos_bimestre": ("2025-09","2025-10")}
     for anos in [2,1,0]:
         fim = ultimo - 12*anos
         janelas[f"trimestre_t{anos}"] = (str(fim-2),str(fim))
     pares = {k:fluxos(df[df.mes.between(a,b)],PAR) for k,(a,b) in janelas.items()}
     comparacoes = {"anual":("antes_12","depois_12"),"inicial":("base_inicial","choque_inicial"),
+                   "bimestre":("base_bimestre","pos_bimestre"),
                    "recente_interanual":("trimestre_t1","trimestre_t0"),
                    "recente_vs_dois_anos":("trimestre_t2","trimestre_t0")}
     SAIDA.mkdir(parents=True,exist_ok=True)

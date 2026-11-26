@@ -178,13 +178,29 @@ def codigo_api(linha, campo, largura):
     raise ValueError(f"Código de {campo} ausente ou ambíguo no registro {linha!r}.")
 
 
+def lote_atual(destino):
+    """Resolve a revisão escolhida, preservando o primeiro CSV e cada versão recebida."""
+    referencia = destino.parent / "versoes" / (destino.stem + ".sha256")
+    if not referencia.exists():
+        return destino
+    digest = referencia.read_text().strip()
+    if not re.fullmatch(r"[a-f0-9]{64}",digest):
+        raise ValueError(f"Referência de versão inválida: {referencia}")
+    revisao = referencia.parent / f"{destino.stem}_{digest}.csv"
+    if destino.exists() and sha256(destino)==digest:
+        return destino
+    if not revisao.exists() or sha256(revisao)!=digest:
+        raise ValueError(f"Lote com hash divergente: {revisao}")
+    return revisao
+
+
 def obter_arquivos(ano, ultimo_mes, atualizar=False):
     """Obtém um lote anual de MG com um único POST e mantém o mês de cada linha."""
     pasta = BRUTOS / "api_mg"
     destino = pasta / f"EXP_MG_{ano}_01-{ultimo_mes:02}.csv"
     if destino.is_file() and not atualizar:
         print(f"Lote anual encontrado: {destino.name}")
-        return destino
+        return lote_atual(destino)
 
     # O filtro de municípios reforça o recorte fiscal no próprio pedido:
     # o serviço já devolveu "Estância - SE" em resposta ao filtro estadual isolado.
@@ -235,19 +251,32 @@ def obter_arquivos(ano, ultimo_mes, atualizar=False):
         temporario = Path(tmp.name)
     try:
         quadro.to_csv(temporario, sep=";", index=False)
-        if destino.exists():
-            anterior = sha256(destino)
-            if sha256(temporario) == anterior:
-                return destino
-            historico = pasta / "versoes"
-            historico.mkdir(exist_ok=True)
-            copia = historico / f"{destino.stem}_{anterior}.csv"
-            if not copia.exists():
-                copia.hardlink_to(destino)
-        temporario.replace(destino)
+        try:
+            destino.hardlink_to(temporario)
+            return destino
+        except FileExistsError:
+            pass
+        digest = sha256(temporario)
+        atual = lote_atual(destino)
+        if sha256(atual) == digest:
+            return atual
+        historico = pasta / "versoes"
+        historico.mkdir(exist_ok=True)
+        revisao = historico / f"{destino.stem}_{digest}.csv"
+        if sha256(destino)==digest:
+            revisao = destino
+        else:
+            try:
+                revisao.hardlink_to(temporario)
+            except FileExistsError:
+                if sha256(revisao)!=digest:
+                    raise ValueError(f"Revisão local divergente: {revisao}")
+        with NamedTemporaryFile(dir=historico,mode="w",delete=False) as ponteiro:
+            ponteiro.write(digest)
+        Path(ponteiro.name).replace(historico / (destino.stem+".sha256"))
+        return revisao
     finally:
         temporario.unlink(missing_ok=True)
-    return destino
 
 
 def ler_blocos(arquivos):
@@ -291,44 +320,19 @@ def ler_e_tratar(arquivo, ano, ultimo_mes=12):
         if dados_mg.empty:
             continue
 
-        # Padronizar códigos
-        for coluna in ["SH4", "CO_PAIS", "CO_MUN"]:
-            dados_mg[coluna] = dados_mg[coluna].str.strip()
-
-        # Remover registros com códigos ausentes
-        dados_mg = dados_mg.dropna(
-            subset=["SH4", "CO_PAIS", "CO_MUN"]
-        )
-
-        # Converter valores numéricos
-        colunas_numericas = [
-            "CO_ANO",
-            "CO_MES",
-            "KG_LIQUIDO",
-            "VL_FOB",
-        ]
-
-        for coluna in colunas_numericas:
-            dados_mg[coluna] = pd.to_numeric(
-                dados_mg[coluna],
-                errors="coerce",
-            )
-
-        # Remover registros com valores inválidos
-        dados_mg = dados_mg.dropna(
-            subset=colunas_numericas
-        )
-
-        dados_mg = dados_mg[
-            (dados_mg["CO_ANO"] == ano)
-            & (dados_mg["CO_MES"].between(1, ultimo_mes))
-            & (dados_mg["KG_LIQUIDO"] >= 0)
-            & (dados_mg["VL_FOB"] >= 0)
-        ].copy()
-
-        for coluna in colunas_numericas:
-            dados_mg[coluna] = dados_mg[coluna].astype("int64")
-
+        for coluna, largura in [("SH4",4),("CO_PAIS",3),("CO_MUN",7)]:
+            codigo = dados_mg[coluna].str.strip()
+            if not codigo.str.fullmatch(rf"[0-9]{{1,{largura}}}").fillna(False).all():
+                raise ValueError(f"Código ausente ou inválido em {coluna} no ano {ano}.")
+            dados_mg[coluna] = codigo.str.zfill(largura)
+        for coluna in ["CO_ANO","CO_MES","KG_LIQUIDO","VL_FOB"]:
+            valores = pd.to_numeric(dados_mg[coluna],errors="raise")
+            if valores.isna().any() or not valores.ge(0).all() or not valores.mod(1).eq(0).all():
+                raise ValueError(f"Medida ausente, negativa ou fracionária em {coluna}, ano {ano}.")
+            dados_mg[coluna] = valores.astype("int64")
+        if not dados_mg.CO_ANO.eq(ano).all() or not dados_mg.CO_MES.between(1,12).all():
+            raise ValueError(f"Competência fora do arquivo de {ano}.")
+        dados_mg = dados_mg[dados_mg.CO_MES.le(ultimo_mes)].copy()
         dados_mg["SG_UF_MUN"] = UF
 
         if not dados_mg.empty:
@@ -341,11 +345,9 @@ def ler_e_tratar(arquivo, ano, ultimo_mes=12):
 
     dados = pd.concat(partes, ignore_index=True)
 
-    # Remover duplicações exatas
-    dados = dados.drop_duplicates()
     chave = ["CO_ANO", "CO_MES", "CO_MUN", "SH4", "CO_PAIS"]
     if dados.duplicated(chave).any():
-        raise ValueError(f"Chave municipal com valores conflitantes em {ano}: {chave}.")
+        raise ValueError(f"Chave municipal duplicada em {ano}: {chave}.")
 
     meses = set(dados["CO_MES"])
     faltantes = set(range(1, max(meses) + 1)) - meses
@@ -458,9 +460,21 @@ def visualizar(dados):
 
 # ================= EXECUÇÃO =================
 
-def executar():
-
-    limite = limite_publicado()
+def executar(desde_lotes=False):
+    if desde_lotes:
+        encerrado = date.today().replace(day=1) - timedelta(days=1)
+        competencias = []
+        for lote in (BRUTOS / "api_mg").glob("EXP_MG_*_01-*.csv"):
+            m = re.fullmatch(r"EXP_MG_(\d{4})_01-(\d{2})\.csv",lote.name)
+            if m:
+                competencia = date(int(m[1]),int(m[2]),1)
+                if competencia <= encerrado:
+                    competencias.append(competencia)
+        if not competencias:
+            raise ValueError("Nenhum lote anual local elegível para reconstrução.")
+        limite = max(competencias)
+    else:
+        limite = limite_publicado()
     print(f"Período solicitado: 01/{ANO_INICIAL} a {limite:%m/%Y}")
     TRATADOS.mkdir(parents=True, exist_ok=True)
 
@@ -470,19 +484,26 @@ def executar():
         ano_final = ano == limite.year
         ultimo_mes = limite.month if ano_final else 12
 
-        # Download automático
-        try:
-            arquivo = obter_arquivos(ano, ultimo_mes, atualizar=ano_final)
-        except requests.RequestException as erro:
-            arquivo = BRUTOS / "api_mg" / f"EXP_MG_{ano}_01-{ultimo_mes:02}.csv"
+        cache = BRUTOS / "api_mg" / f"EXP_MG_{ano}_01-{ultimo_mes:02}.csv"
+        if desde_lotes:
+            arquivo = lote_atual(cache)
             if not arquivo.is_file():
-                arquivo = BRUTOS / f"EXP_{ano}_MUN.csv"
-            if not arquivo.is_file():
-                raise
-            print(f"Atualização indisponível. Verificando a cópia local. {erro}")
+                raise ValueError(f"Lote obrigatório ausente: {arquivo}")
+        else:
+            try:
+                arquivo = obter_arquivos(ano, ultimo_mes, atualizar=ano_final)
+            except requests.RequestException as erro:
+                arquivo = lote_atual(cache)
+                if not arquivo.is_file():
+                    arquivo = BRUTOS / f"EXP_{ano}_MUN.csv"
+                if not arquivo.is_file():
+                    raise
+                print(f"Atualização indisponível. Verificando a cópia local. {erro}")
 
         # Leitura, limpeza e tratamento
         dados_ano = ler_e_tratar(arquivo, ano, ultimo_mes)
+        if desde_lotes and dados_ano.CO_MES.max() != ultimo_mes:
+            raise ValueError(f"Cobertura incompatível com o nome do lote de {ano}.")
         if not ano_final and dados_ano["CO_MES"].max() < 12:
             raise ValueError(f"A série de {ano} termina antes de dezembro.")
         if ano_final and dados_ano["CO_MES"].max() < ultimo_mes:
@@ -503,15 +524,13 @@ def executar():
 
     # Salvar CSV tratado
     saida = TRATADOS / f"exportacoes_{UF.lower()}_atual.csv"
-    temporario = saida.with_suffix(".csv.part")
-
-    dados.to_csv(
-        temporario,
-        sep=";",
-        index=False,
-        encoding="utf-8-sig",
-    )
-    temporario.replace(saida)
+    with NamedTemporaryFile(dir=TRATADOS,suffix=".part",delete=False) as tmp:
+        temporario = Path(tmp.name)
+    try:
+        dados.to_csv(temporario, sep=";", index=False, encoding="utf-8-sig")
+        temporario.replace(saida)
+    finally:
+        temporario.unlink(missing_ok=True)
     print(f"Cobertura da base: {dados['DATA'].min():%m/%Y} a {dados['DATA'].max():%m/%Y}")
 
     # Gerar gráficos
@@ -535,6 +554,7 @@ if __name__ == "__main__":
         "--somente-graficos", action="store_true",
         help="Regera os três gráficos históricos a partir do consolidado local.",
     )
+    modos.add_argument("--desde-lotes",action="store_true",help="Reconstrói o consolidado com os lotes municipais locais.")
     args = parser.parse_args()
     try:
         if args.somente_graficos:
@@ -552,6 +572,6 @@ if __name__ == "__main__":
                 ano_final = ano == limite.year
                 obter_arquivos(ano, limite.month if ano_final else 12, atualizar=ano_final)
         else:
-            executar()
+            executar(args.desde_lotes)
     except (requests.RequestException, ValueError, KeyError, RuntimeError) as erro:
         parser.exit(1, f"{erro}\n")

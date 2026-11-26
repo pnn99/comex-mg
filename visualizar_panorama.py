@@ -199,7 +199,7 @@ def estrutura(cidades):
 
 def recuperacao(p):
     trimestre = p.loc[["trimestre_t2", "trimestre_t1", "trimestre_t0"]]
-    fig = pagina("Quanto da queda foi recuperado?",
+    fig = pagina("Como evoluíram as vendas em trimestres equivalentes?",
                  "Mesmos três meses em três anos consecutivos • Vendas de Minas Gerais aos EUA")
     ax = fig.add_axes([.095, .25, .37, .45])
     x = np.arange(len(trimestre))

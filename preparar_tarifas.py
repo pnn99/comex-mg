@@ -83,5 +83,61 @@ def obter_lista(destino=LISTA):
     return destino
 
 
+
+# Recorte das tabelas incondicionais. Códigos estatísticos HTSUS de dez
+# dígitos são conservados integralmente. Usos finais ficam indeterminados.
+FONTES_2026 = {
+    "secao122": ("https://www.whitehouse.gov/wp-content/uploads/2026/02/2026Section122.prc_.ANNEX1_.FINAL_.pdf",
+                 r"\(ii\)\s+As provided in heading 9903\.03\.03", r"\(iii\)\s+As provided in heading 9903\.03\.04"),
+    "secao301_brasil": ("https://content.govdelivery.com/attachments/USDHSCBP/2026/07/21/file_attachments/3721364/Section%20301%20HTS%20LIST07172026_508c.pdf",
+                         r"9903\.05\.03\s*:", r"9903\.05\.04\s*:"),
+    "secao301_trabalho": ("https://content.govdelivery.com/attachments/USDHSCBP/2026/07/23/file_attachments/3723786/Forced%20Labor%20HTS%20LIST.pdf",
+                           r"9903\.05\.86\s*:", r"9903\.05\.87\s*:"),
+}
+RECORTE_2026 = LISTA.parents[2] / "docs/excecoes_2026.csv"
+HASH_2026 = "6edc4a6a972053394332c4144710d91d55fac9b59e3f41a6079dc95909d5dcea"
+
+
+def extrair_anexo_2026(texto, medida):
+    _, inicio, fim = FONTES_2026[medida]
+    trecho = re.search(inicio + r"(.*?)" + fim, texto, re.S | re.I)
+    if trecho is None:
+        raise ValueError(f"Tabela incondicional ausente em {medida}.")
+    codigos = re.findall(r"(?<!\d)(\d{4}\.\d{2}\.(?:\d{4}|\d{2}))(?!\d)", trecho[1])
+    resultado = {c.replace(".", "") for c in codigos if not c.startswith("99")}
+    if not resultado:
+        raise ValueError(f"Tabela tarifária vazia em {medida}.")
+    return resultado
+
+
+def ler_excecoes_2026(arquivo=RECORTE_2026):
+    import pandas as pd
+    if hashlib.sha256(arquivo.read_bytes().replace(b"\r\n", b"\n")).hexdigest() != HASH_2026:
+        raise ValueError("SHA-256 divergente no recorte tarifário de 2026.")
+    return pd.read_csv(arquivo, sep=";", dtype=str)
+
+
+def verificar_anexos_2026():
+    recorte = ler_excecoes_2026()
+    for medida, (url, _, _) in FONTES_2026.items():
+        with requisitar("GET", url) as resposta:
+            resposta.raise_for_status()
+            texto = subprocess.run(["pdftotext","-layout","-","-"], input=resposta.content,
+                                   stdout=subprocess.PIPE, check=True).stdout.decode()
+            codigos = extrair_anexo_2026(texto, medida)
+            faltantes = set(recorte.loc[recorte.medida.eq(medida),"htsus"]) - codigos
+            if faltantes:
+                raise ValueError(f"{medida}: códigos transcritos divergentes: {sorted(faltantes)}")
+            print(medida, "SHA-256 PDF", hashlib.sha256(resposta.content).hexdigest())
+
+
 if __name__ == "__main__":
-    print(obter_lista())
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--verificar-anexos-2026", action="store_true")
+    obter_lista()
+    if parser.parse_args().verificar_anexos_2026:
+        verificar_anexos_2026()
+    ler_excecoes_2026()
+    from regimes_comerciais import calendario, salvar, SECAO
+    salvar(calendario(), "calendario_medidas_tarifarias", SECAO)
